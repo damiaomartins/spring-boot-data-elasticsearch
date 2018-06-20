@@ -1,19 +1,29 @@
 package com.example.springelasticsearchdemo;
 
 import com.example.springelasticsearchdemo.domain.Product;
-import com.example.springelasticsearchdemo.domain.Rating;
+import com.example.springelasticsearchdemo.domain.UserPurchases;
 import com.example.springelasticsearchdemo.repository.ProductRepository;
 import com.example.springelasticsearchdemo.repository.RatingRepository;
+import org.elasticsearch.action.index.IndexRequest;
+import org.elasticsearch.action.update.UpdateRequest;
+import org.elasticsearch.script.Script;
+import org.elasticsearch.script.ScriptType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.data.elasticsearch.core.ElasticsearchTemplate;
+import org.springframework.data.elasticsearch.core.query.UpdateQuery;
+import org.springframework.data.elasticsearch.core.query.UpdateQueryBuilder;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
+import java.util.Collections;
+import java.util.Date;
 
 @SpringBootApplication
 public class SpringElasticsearchDemoApplication implements CommandLineRunner {
@@ -24,6 +34,9 @@ public class SpringElasticsearchDemoApplication implements CommandLineRunner {
     @Autowired
     private RatingRepository ratingRepository;
 
+    @Autowired
+    private ElasticsearchTemplate elasticsearchTemplate;
+
 
     public static void main(String[] args) {
         SpringApplication.run(SpringElasticsearchDemoApplication.class, args).close();
@@ -31,12 +44,12 @@ public class SpringElasticsearchDemoApplication implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        this.indexProducts();
         this.indexRating();
+//        this.indexProducts();
     }
 
     public void indexProducts() {
-        Path path = Paths.get("C:\\Work\\Workspaces\\etc\\elastic-graph\\data\\sample_products.txt");
+        Path path = Paths.get("C:\\Work\\Workspaces\\etc\\elastic-graph\\data\\dafiti_skus_full.txt");
         try (BufferedReader reader = Files.newBufferedReader(path)) {
             long count = reader.lines()
                     .parallel()
@@ -63,15 +76,26 @@ public class SpringElasticsearchDemoApplication implements CommandLineRunner {
                     .parallel()
                     .map(line -> {
                         String[] split = line.split("\\|");
-                        return new Rating()
-                                .setTimestamp(Long.valueOf(split[0]))
-                                .setUser(split[1])
-                                .setCustomer(split[2])
-                                .setCampaign(split[3])
-                                .setEventType(split[4])
-                                .setSku(split[5]);
+                        UserPurchases user = new UserPurchases()
+                                .setUser(split[1]);
+                        ratingRepository.findById(user.getUser()).orElse(ratingRepository.save(user));
+                        return user.addSku(split[5]);
                     })
-                    .peek(rating -> ratingRepository.save(rating))
+                    .peek(rating -> {
+                        UpdateQuery updateQuery = new UpdateQueryBuilder()
+                                .withId(rating.getUser())
+                                .withClass(UserPurchases.class)
+                                .withUpdateRequest(new UpdateRequest()
+                                        .index("user_purchases")
+                                        .id(rating.getUser())
+                                        .scriptedUpsert(true)
+                                        .script(new Script(ScriptType.INLINE,
+                                                "painless",
+                                                "ctx._source.skus += params.sku",
+                                                Collections.singletonMap("sku", rating.getSkus()))))
+                                .build();
+                        elasticsearchTemplate.update(updateQuery);
+                    })
                     .count();
             System.out.println("Quantidade de produtos: " + count);
         } catch (IOException e) {
