@@ -77,22 +77,22 @@ public class SpringElasticsearchDemoApplication implements CommandLineRunner {
                     .map(line -> {
                         String[] split = line.split("\\|");
                         UserPurchases user = new UserPurchases()
-                                .setUser(split[1]);
-                        ratingRepository.findById(user.getUser()).orElse(ratingRepository.save(user));
-                        return user.addSku(split[5]);
+                                .setUser(split[1]).addSku(split[5]);
+                        return ratingRepository.findById(user.getUser()).orElse(ratingRepository.save(user));
                     })
                     .peek(rating -> {
                         UpdateQuery updateQuery = new UpdateQueryBuilder()
                                 .withId(rating.getUser())
                                 .withClass(UserPurchases.class)
+                                .withIndexName("user_purchases")
+                                .withType("user_purchases")
                                 .withUpdateRequest(new UpdateRequest()
-                                        .index("user_purchases")
-                                        .id(rating.getUser())
                                         .scriptedUpsert(true)
                                         .script(new Script(ScriptType.INLINE,
                                                 "painless",
-                                                "ctx._source.skus += params.sku",
-                                                Collections.singletonMap("sku", rating.getSkus()))))
+                                                "if(ctx._source.skus == null) {ctx._source.skus = []} if(!ctx._source.skus.contains(params.sku)) { ctx._source.skus.add(params.sku) }",
+                                                Collections.singletonMap("sku", rating.getSkus().get(0))))
+                                        .index("user_purchases").type("user_purchases").id(rating.getUser()))
                                 .build();
                         elasticsearchTemplate.update(updateQuery);
                     })
